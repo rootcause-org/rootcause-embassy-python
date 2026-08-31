@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rootcause-embassy"
+version = "0.1.0"
+description = "rootcause's trusted in-app presence for Python services"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "mypy>=1.17.1",
+  "pytest>=8.4.1",
+  "ruff>=0.12.11",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rootcause_embassy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+packages = ["rootcause_embassy"]

@@ -1,0 +1,266 @@
+# rootcause-embassy-python
+
+The Python **Embassy**: rootcause's trusted in-app presence inside your Python service.
+
+It does four things, all on your side of the wire:
+
+1. **Actions** — verify a signed, digest-pinned invocation, resolve its approved Python body, and
+   execute it through the runner your application explicitly registered.
+2. **Analysis** — ask rootcause to analyze something and receive the drafted answer later on a route
+   you mount. No polling or custom callback protocol.
+3. **Chat** — mint the short-lived token that lets a logged-in user chat with rootcause in your UI.
+4. **API** — call any rootcause API endpoint, with bearer exchange and caching handled for you.
+
+Python 3.13+. Zero runtime dependencies: the package uses only the standard library. The wire
+contract lives in the
+[`rootcause-embassy`](https://github.com/rootcause-org/rootcause-embassy) hub; this package vendors
+and replays that hub's byte-exact fixtures.
+
+## Install
+
+```sh
+uv add rootcause-embassy
+```
+
+## Configure
+
+Build one `Embassy` at boot and share it. `Config` validates fail-closed: a blank action secret, a
+placeholder fetch URL, a half-configured API/chat plane, or a chat key equal to the action key is a
+boot error.
+
+```python
+from rootcause_embassy import Config, Embassy
+
+embassy = Embassy(
+    Config(
+        # Every string falls back to its ROOTCAUSE_* environment variable:
+        # secret            ROOTCAUSE_ACTION_SECRET
+        # fetch_url         ROOTCAUSE_FETCH_URL
+        # trigger_url       ROOTCAUSE_TRIGGER_URL
+        # sent_message_url  ROOTCAUSE_SENT_MESSAGE_URL
+        # api_base_url      ROOTCAUSE_API_BASE_URL
+        # api_key           ROOTCAUSE_API_KEY
+        # chat_secret       ROOTCAUSE_CHAT_SECRET  (webhook_secret, never secret)
+        # chat_project      ROOTCAUSE_CHAT_PROJECT
+        # chat_base_url     ROOTCAUSE_CHAT_BASE_URL
+        runner=run_action,
+        result_handler=handle_analysis_result,
+    )
+)
+```
+
+### Litestar mount
+
+The package is framework-agnostic: adapters only translate request bytes and the returned
+`(status, headers, body)` tuple. A sync handler is deliberately used so Litestar puts execution in
+its thread pool.
+
+```python
+from litestar import Request, Response, route
+
+
+@route(
+    ["/rootcause/action", "/rootcause/action/health"],
+    http_method=["GET", "POST", "PUT", "DELETE"],
+    sync_to_thread=True,
+)
+def rootcause_action(request: Request, data: bytes = b"") -> Response[bytes]:
+    subpath = request.url.path.removeprefix("/rootcause/action")
+    signed_bytes = request.url.query.encode() if request.method == "GET" else data
+    status, headers, body = embassy.handle_action(
+        request.method, subpath, request.headers.get("X-Webhook-Signature"), signed_bytes
+    )
+    return Response(body, status_code=status, headers=headers, media_type=None)
+
+
+@route("/rootcause/result", http_method=["POST", "GET"], sync_to_thread=True)
+def rootcause_result(request: Request, data: bytes = b"") -> Response[bytes]:
+    status, headers, body = embassy.handle_result(
+        request.method, request.headers.get("X-Webhook-Signature"), data
+    )
+    return Response(body, status_code=status, headers=headers, media_type=None)
+```
+
+### FastAPI mount
+
+FastAPI also runs ordinary `def` route functions in its thread pool.
+
+```python
+from fastapi import Body, FastAPI, Request, Response
+
+app = FastAPI()
+
+
+@app.api_route("/rootcause/action", methods=["GET", "POST", "PUT", "DELETE"])
+@app.api_route("/rootcause/action/{child:path}", methods=["GET", "POST", "PUT", "DELETE"])
+def rootcause_action(request: Request, child: str = "", data: bytes = Body(b"")) -> Response:
+    signed_bytes = request.url.query.encode() if request.method == "GET" else data
+    subpath = f"/{child}" if child else ""
+    status, headers, body = embassy.handle_action(
+        request.method, subpath, request.headers.get("X-Webhook-Signature"), signed_bytes
+    )
+    return Response(body, status_code=status, headers=headers, media_type=None)
+
+
+@app.api_route("/rootcause/result", methods=["POST", "GET"])
+def rootcause_result(request: Request, data: bytes = Body(b"")) -> Response:
+    status, headers, body = embassy.handle_result(
+        request.method, request.headers.get("X-Webhook-Signature"), data
+    )
+    return Response(body, status_code=status, headers=headers, media_type=None)
+```
+
+## Registering an action runner
+
+The Embassy ships **no built-in interpreter**. A real `runtime: "python"` invocation without a
+runner is a signed `400 invalid_request`; dry-run still performs the complete signed fetch and skips
+only execution. This keeps executing fetched source an explicit application choice.
+
+```python
+import time
+from types import MappingProxyType
+from typing import Any
+
+from rootcause_embassy import ActionContext
+
+
+def run_action(ctx: ActionContext, params: dict[str, Any]) -> Any:
+    if time.monotonic() >= ctx.deadline:
+        raise TimeoutError("action deadline elapsed")
+
+    scope = {
+        "__builtins__": {"len": len, "str": str},  # your explicit policy
+        "params": MappingProxyType(params),  # data, never interpolated into source
+        "tenant": ctx.tenant,  # trusted typed tuple, never params/env
+        "out": ctx.out,  # captured stdout, capped at 64 KiB
+    }
+    exec(compile(ctx.script, f"<rootcause:{ctx.digest}>", "exec"), scope)
+    return scope["result"]
+```
+
+That example is an explicit in-process `exec` policy, not a sandbox. In production, expose only the
+globals your approved scripts need. A runner exception becomes a signed `200` with `ok:false`, the
+Python exception class/message/backtrace, and captured output.
+
+Python cannot safely kill a running thread. `timeout` (20s) and `total_deadline` (22s) therefore act
+as boundary backstops: fetch receives the remaining timeout, execution is refused if no budget
+remains, the runner receives `ctx.deadline`, and elapsed time is checked again on return. Pass that
+deadline into your I/O and make actions idempotent; a timeout is not a transaction boundary.
+
+## What happens, in order
+
+| Step | Refusal |
+|---|---|
+| verify HMAC over the exact request bytes | `401 bad_signature` |
+| parse required fields and require `runtime: "python"` | `400 invalid_request` |
+| validate the tenant tuple | `400 invalid_request` |
+| require fresh `issued_at` and an unseen `nonce` | `409 replay` |
+| re-validate params against the invocation schema | `422 schema_violation` |
+| signed script fetch plus digest/runtime verification | `502 resolve_failed` |
+| require a runner unless dry-run | `400 invalid_request` |
+| execute through the registered runner | signed `200`, possibly `ok:false` |
+
+Every outcome is signed, including refusals. The deliberate exceptions are the unsigned
+`405 + Allow: POST` mount probe and the unsigned `404` returned by an unauthenticated health probe.
+
+## Async analysis
+
+```python
+from rootcause_embassy import AnalysisRequest, Principal
+
+analysis = embassy.start_analysis(
+    AnalysisRequest(
+        subject=ticket.subject,
+        body=ticket.body,
+        metadata={"resource_type": "SupportTicket", "resource_id": str(ticket.id)},
+        session_id=ticket.rootcause_session_id,  # omit on turn one
+        principal=Principal(
+            kind="acme_admin",
+            external_id=str(current_user.id),  # from your authenticated session
+            assurance="session",
+        ),
+    )
+)
+# Persist analysis.analysis_id and analysis.session_id.
+```
+
+Your `result_handler(result)` must be idempotent: upsert by `result.analysis_id` or metadata. A
+handler failure is not acknowledged, the nonce is released, and rootcause redelivers. Render
+`result.actions` as human-confirmed proposals; never execute them automatically.
+`result.executed_actions` already ran host-side and must be rendered as outcomes.
+
+After a human sends a reply or answers a question:
+
+```python
+from rootcause_embassy import Answer, SentMessageMetadata, SentMessageRequest
+
+embassy.capture_sent_message(
+    SentMessageRequest(
+        session_id=ticket.rootcause_session_id,
+        sent_body=reply.body,
+        proposed_body=ticket.draft,
+        sender=agent.name,
+        metadata=SentMessageMetadata("SupportTicket", str(ticket.id)),
+        answers=[Answer("country", ["BE"])],
+    )
+)
+```
+
+Sent-message metadata is fixed to `resource_type` and `resource_id`; trigger metadata is free-form.
+Attachments are strict base64 and capped before transport at 256 KiB each and 6 MiB decoded total.
+
+## Embedded chat
+
+```python
+from rootcause_embassy import Claims, Widget, mint_embed_token, widget_tag_html
+
+claims = Claims(
+    project="acme",
+    external_id=str(current_user.id),
+    kind="acme_admin",
+    origin="https://admin.acme.com",
+    tenant=current_tenant.slug,  # server-authorized context, never browser input
+    locale="nl",
+    color_scheme="light",
+)
+token = mint_embed_token(chat_secret, claims)
+tag = widget_tag_html(
+    Widget("https://app.replypen.com", "acme", token, mode="page", target="#rc-chat")
+)
+```
+
+Mint a fresh token per render: the host burns its `jti` when a session opens. Chat uses the project's
+`webhook_secret`, never the action secret.
+
+## Generic API plane
+
+```python
+response = embassy.api.patch(
+    "/api/v1/tenants/acme/profile",
+    body={"settings": settings, "source": "embassy"},
+)
+if not response.ok and response.retryable:
+    retry_later()  # transport/auth, 5xx, 429, or 408
+```
+
+HTTP and auth failures are `APIResponse` values. Invalid configuration or arguments (blank path,
+off-origin absolute URL) raise `Misconfigured`. An `rcor_` key is exchanged and cached per
+`(api_base_url, api_key)` behind a lock; any other key is used verbatim. Use
+`embassy.api_for(base_url, key)` for another project.
+
+## Multi-worker deployments
+
+The default `MemoryNonceStore` is correct for one process only. A multi-worker deployment must
+provide an atomic shared implementation of `seen(nonce, ttl) -> bool` and `release(nonce)`. `seen`
+records an unseen nonce and returns `True` only for a duplicate. `release` matters on the result
+route: a failed dispatch must be genuinely retried.
+
+Script bodies cache in memory and optionally under `cache_dir`. Disk reads are re-hashed before use;
+malformed digests never become filenames.
+
+## Development
+
+```sh
+make check        # ruff + mypy strict + pytest
+make conformance  # fixture replay; prints the vendored hub SHA
+```
