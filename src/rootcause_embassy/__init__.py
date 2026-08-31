@@ -34,7 +34,7 @@ from .resultroute import ResultRoute
 from .signature import HEADER, sign, verify
 from .tenant import Tenant
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 PROTOCOL = 1
 RUNTIME = "python"
 
@@ -62,11 +62,13 @@ class Embassy:
     def handle_result(self, method: str, signature: str | None, body: bytes) -> Response:
         return self._results.handle(method, signature, body)
 
-    def start_analysis(self, request: AnalysisRequest) -> Analysis:
-        return self._analysis.start_analysis(request)
+    def start_analysis(self, request: AnalysisRequest, project_id: str | None = None) -> Analysis:
+        return self._analysis.start_analysis(request, project_id)
 
-    def capture_sent_message(self, request: SentMessageRequest) -> SentMessage:
-        return self._analysis.capture_sent_message(request)
+    def capture_sent_message(
+        self, request: SentMessageRequest, project_id: str | None = None
+    ) -> SentMessage:
+        return self._analysis.capture_sent_message(request, project_id)
 
     def api_for(self, api_base_url: str, api_key: str) -> API:
         return API(self.config, api_base_url, api_key)

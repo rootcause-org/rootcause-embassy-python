@@ -28,6 +28,12 @@ Build one `Embassy` at boot and share it. `Config` validates fail-closed: a blan
 placeholder fetch URL, a half-configured API/chat plane, or a chat key equal to the action key is a
 boot error.
 
+Use exactly one reverse-secret mode. `secret` preserves the single-project deployment and its
+legacy result/health wire behavior. A shared mount can instead provide `secrets`, a non-empty mapping
+of project UUIDs to non-blank reverse secrets; the project selector is read before HMAC verification
+only to choose the key. Unknown, missing, or malformed selectors get an opaque unsigned refusal and
+cannot reach replay, resolution, dispatch, or execution.
+
 ```python
 from rootcause_embassy import Config, Embassy
 
@@ -47,6 +53,12 @@ embassy = Embassy(
         result_handler=handle_analysis_result,
     )
 )
+
+# Shared mount variant:
+# Config(
+#     secrets={"11111111-1111-1111-1111-111111111111": project_secret},
+#     fetch_url="https://app.replypen.com/actions/script",
+# )
 ```
 
 ### Litestar mount
@@ -102,6 +114,9 @@ def rootcause_result_post(request: Request, data: bytes) -> Response[bytes]:
 def rootcause_result_probe(request: Request) -> Response[bytes]:
     return embassy_response(embassy.handle_result(request.method, None, b""))
 ```
+
+In reverse-secret map mode, the health request must include the raw signed query
+`project_id=<uuid>`; single-secret mode continues to accept the legacy empty query.
 
 The Litestar adapter is illustrative and is not executed by this package's test suite. Configure
 Litestar or the ASGI server to reject request bodies above `Config.max_body_bytes` before buffering;
@@ -231,6 +246,7 @@ analysis = embassy.start_analysis(
     AnalysisRequest(
         subject=ticket.subject,
         body=ticket.body,
+        project_id=ticket.project_id,  # required when using reverse-secret map mode
         metadata={"resource_type": "SupportTicket", "resource_id": str(ticket.id)},
         session_id=ticket.rootcause_session_id,  # omit on turn one
         principal=Principal(
@@ -256,6 +272,7 @@ from rootcause_embassy import Answer, SentMessageMetadata, SentMessageRequest
 embassy.capture_sent_message(
     SentMessageRequest(
         session_id=ticket.rootcause_session_id,
+        project_id=ticket.project_id,  # required when using reverse-secret map mode
         sent_body=reply.body,
         proposed_body=ticket.draft,
         sender=agent.name,

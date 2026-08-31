@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import time
@@ -44,6 +45,7 @@ def _new_nonce() -> str:
 @dataclass(slots=True)
 class Config:
     secret: str = ""
+    secrets: dict[str, str] | None = None
     fetch_url: str = ""
     trigger_url: str = ""
     sent_message_url: str = ""
@@ -81,13 +83,33 @@ class Config:
         self.chat_base_url = self.chat_base_url or os.getenv("ROOTCAUSE_CHAT_BASE_URL", "")
         if not self.fetch_url:
             self.fetch_url = PLACEHOLDER_FETCH_URL
+        if self.secrets is not None:
+            self.secrets = dict(self.secrets)
         self._validate()
 
     def _validate(self) -> None:
-        if not self.secret:
+        has_secret = _nonblank(self.secret)
+        has_secrets = self.secrets is not None
+        if has_secret and has_secrets:
+            raise Misconfigured("Configure exactly one of Secret or Secrets")
+        if not has_secret and (self.secrets is None or not self.secrets):
             raise Misconfigured(
-                "Secret is required (ROOTCAUSE_ACTION_SECRET); a blank HMAC key is forgeable"
+                "Secret is required (ROOTCAUSE_ACTION_SECRET) or Secrets must be non-empty; "
+                "a blank HMAC key is forgeable"
             )
+        if self.secrets is not None:
+            for project_id, secret in self.secrets.items():
+                if not isinstance(project_id, str) or _canonical_project_id(project_id) is None:
+                    raise Misconfigured("Secrets keys must be project UUIDs")
+                if not isinstance(secret, str) or not _nonblank(secret):
+                    raise Misconfigured("Secrets values must be non-blank HMAC keys")
+            normalized = {
+                _canonical_project_id(project_id) or project_id: secret
+                for project_id, secret in self.secrets.items()
+            }
+            if len(normalized) != len(self.secrets):
+                raise Misconfigured("Secrets keys must be unique project UUIDs")
+            self.secrets = normalized
         if _placeholder_url(self.fetch_url):
             raise Misconfigured(
                 f"FetchURL is the placeholder ({self.fetch_url}); set ROOTCAUSE_FETCH_URL"
@@ -102,6 +124,32 @@ class Config:
             raise Misconfigured("byte caps must be positive")
         self._validate_api()
         self._validate_chat()
+
+    @property
+    def map_mode(self) -> bool:
+        return self.secrets is not None
+
+    def secret_for_project(self, project_id: str | None) -> str | None:
+        """Return the HMAC key selected by a trusted or pre-auth project id."""
+
+        if self.secrets is None:
+            return self.secret if _nonblank(self.secret) else None
+        canonical = _canonical_project_id(project_id)
+        return self.secrets.get(canonical) if canonical is not None else None
+
+    def secret_from_body(self, body: bytes) -> str | None:
+        """Select a map key from only the unverified project_id field."""
+
+        if self.secrets is None:
+            return self.secret_for_project(None)
+        try:
+            raw: Any = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        project_id = raw.get("project_id")
+        return self.secret_for_project(project_id if isinstance(project_id, str) else None)
 
     def _validate_api(self) -> None:
         if not self.api_base_url and not self.api_key:
@@ -120,7 +168,9 @@ class Config:
             raise Misconfigured("ChatSecret is required when chat is configured")
         if not self.chat_project:
             raise Misconfigured("ChatProject is required when chat is configured")
-        if self.chat_secret == self.secret:
+        if self.chat_secret == self.secret or (
+            self.secrets is not None and self.chat_secret in self.secrets.values()
+        ):
             raise Misconfigured("ChatSecret must differ from Secret")
         if self.chat_base_url and not _absolute_http_url(self.chat_base_url):
             raise Misconfigured("ChatBaseURL must be an absolute http(s) URL")
@@ -146,3 +196,16 @@ def _placeholder_url(raw: str) -> bool:
         or not _absolute_http_url(raw)
         or hostname.casefold().endswith(".invalid")
     )
+
+
+def _nonblank(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _canonical_project_id(value: str | None) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return str(uuid.UUID(value))
+    except (ValueError, AttributeError):
+        return None

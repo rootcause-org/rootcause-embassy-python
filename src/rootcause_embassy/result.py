@@ -65,6 +65,7 @@ class Decline:
 class Result:
     analysis_id: str
     session_id: str = ""
+    project_id: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     draft: str = ""
     draft_subject: str = ""
@@ -142,6 +143,7 @@ def decode_result(payload: dict[str, Any]) -> Result:
     return Result(
         analysis_id=_string(payload.get("analysis_id")),
         session_id=_string(payload.get("session_id")),
+        project_id=_string(payload.get("project_id")),
         metadata=metadata,
         draft=draft,
         draft_subject=draft_subject,

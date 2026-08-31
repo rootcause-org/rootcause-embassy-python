@@ -38,6 +38,9 @@ class ResultRoute:
             return 405, {"Content-Type": "application/json", "Allow": "POST"}, method_body
         if len(body) > self._config.max_body_bytes:
             refusal = invalid_request("request body exceeds max_body_bytes")
+            secret = self._config.secret_from_body(body)
+            if secret is None:
+                return self._unsigned_refusal(refusal)
             return self._signed(
                 refusal.status,
                 {
@@ -47,11 +50,15 @@ class ResultRoute:
                         "message": refusal.message,
                     },
                 },
+                secret,
             )
+        secret = self._config.secret_from_body(body)
+        if secret is None:
+            return self._unsigned_refusal(bad_signature())
         nonce = ""
         consumed = False
         try:
-            if not verify(signature, body, self._config.secret):
+            if not verify(signature, body, secret):
                 raise bad_signature()
             payload = _parse(body)
             missing = sorted(
@@ -72,7 +79,7 @@ class ResultRoute:
                     "rootcause result redelivery acked",
                     extra={"analysis_id": _string(payload["analysis_id"])},
                 )
-                return self._signed(200, {"ok": True})
+                return self._signed(200, {"ok": True}, secret)
             consumed = True
             if self._config.result_handler is None:
                 raise handler_error("ResultHandler is not configured")
@@ -101,7 +108,7 @@ class ResultRoute:
                     "metadata_keys": metadata_keys,
                 },
             )
-            return self._signed(200, {"ok": True})
+            return self._signed(200, {"ok": True}, secret)
         except Refusal as refusal:
             if consumed:
                 self._config.nonce_store.release(nonce)
@@ -114,6 +121,7 @@ class ResultRoute:
                         "message": refusal.message,
                     },
                 },
+                secret,
             )
         except Exception as error:
             if consumed:
@@ -127,15 +135,29 @@ class ResultRoute:
                         "message": type(error).__name__,
                     },
                 },
+                secret,
             )
 
-    def _signed(self, status: int, payload: dict[str, Any]) -> Response:
+    def _signed(self, status: int, payload: dict[str, Any], secret: str) -> Response:
         body = _json_bytes(payload)
         return (
             status,
-            {"Content-Type": "application/json", HEADER: sign(body, self._config.secret)},
+            {"Content-Type": "application/json", HEADER: sign(body, secret)},
             body,
         )
+
+    @staticmethod
+    def _unsigned_refusal(refusal: Refusal) -> Response:
+        body = _json_bytes(
+            {
+                "ok": False,
+                "error": {
+                    "class": refusal.error_class,
+                    "message": refusal.message,
+                },
+            }
+        )
+        return refusal.status, {"Content-Type": "application/json"}, body
 
 
 def _parse(body: bytes) -> dict[str, Any]:

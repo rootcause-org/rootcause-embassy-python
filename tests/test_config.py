@@ -48,3 +48,29 @@ def test_config_env_fallback_and_explicit_precedence(monkeypatch: pytest.MonkeyP
     assert config.secret == "from-env"
     assert config.trigger_url.endswith("/analyses/demo")
     assert Config(secret="explicit").secret == "explicit"
+
+
+def test_reverse_secret_map_is_exclusive_and_validated() -> None:
+    project_id = "11111111-1111-1111-1111-111111111111"
+    with pytest.raises(Misconfigured, match="exactly one"):
+        Config(secret="secret", secrets={project_id: "other"}, fetch_url=FETCH)
+    with pytest.raises(Misconfigured, match="non-empty"):
+        Config(secrets={}, fetch_url=FETCH)
+    with pytest.raises(Misconfigured, match="project UUID"):
+        Config(secrets={"not-a-project": "secret"}, fetch_url=FETCH)
+    with pytest.raises(Misconfigured, match="non-blank"):
+        Config(secrets={project_id: "  "}, fetch_url=FETCH)
+    config = Config(secrets={project_id.upper(): "secret"}, fetch_url=FETCH)
+    assert config.map_mode
+    assert config.secret_for_project(project_id) == "secret"
+    assert config.secret_for_project("22222222-2222-2222-2222-222222222222") is None
+
+
+def test_chat_secret_cannot_equal_any_reverse_secret_in_map() -> None:
+    with pytest.raises(Misconfigured, match="must differ"):
+        Config(
+            secrets={"11111111-1111-1111-1111-111111111111": "map-secret"},
+            fetch_url=FETCH,
+            chat_secret="map-secret",
+            chat_project="demo",
+        )

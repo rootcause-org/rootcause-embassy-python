@@ -105,6 +105,25 @@ def embassy(host: FakeHost, *, runner=local_runner, result_handler=None, **overr
     return Embassy(Config(**values))
 
 
+def map_embassy(host: FakeHost, *, runner=local_runner, result_handler=None) -> Embassy:
+    return Embassy(
+        Config(
+            secrets={
+                PROJECT_ID: REVERSE_SECRET,
+                "22222222-2222-2222-2222-222222222222": "sibling-secret",
+            },
+            fetch_url="https://host.test/actions/script",
+            trigger_url="https://host.test/analyses/demo",
+            sent_message_url="https://host.test/analyses/demo/sent-message",
+            runner=runner,
+            result_handler=result_handler,
+            now=lambda: REFERENCE_CLOCK,
+            nonce=lambda: "contract-nonce",
+            transport=host,
+        )
+    )
+
+
 def invocation(host: FakeHost, **overrides: Any) -> bytes:
     payload: dict[str, Any] = {
         "action_id": "devise_send_password_reset",
@@ -337,9 +356,90 @@ def test_method_not_allowed_and_health() -> None:
         fixture("actions/health_response.json")
         .decode()
         .replace('"embassy":"ruby"', '"embassy":"python"')
-        .replace('"version":"0.5.0"', '"version":"0.1.0"')
+        .replace('"version":"0.5.0"', '"version":"0.2.0"')
     )
     assert response[2].decode() == expected
+
+
+def test_reverse_secret_map_action_hit_and_selector_failures() -> None:
+    host = FakeHost()
+    target = map_embassy(host)
+    body = invocation(host)
+    response = target.handle_action("POST", "", sign(body, REVERSE_SECRET), body)
+    assert response[0] == 200
+    assert verify(response[1][HEADER], response[2], REVERSE_SECRET)
+    assert host.last_request is not None
+    assert host.last_request.headers[HEADER] == sign(
+        urlsplit(host.last_request.url).query.encode(), REVERSE_SECRET
+    )
+
+    sibling_body = invocation(
+        host,
+        project_id=PROJECT_ID,
+    )
+    sibling_refusal = target.handle_action(
+        "POST", "", sign(sibling_body, "sibling-secret"), sibling_body
+    )
+    assert sibling_refusal[0] == 401
+    assert verify(sibling_refusal[1][HEADER], sibling_refusal[2], REVERSE_SECRET)
+    assert host.last_request is not None
+
+    for selector in (None, "not-a-uuid", "33333333-3333-3333-3333-333333333333"):
+        selector_body = wire_json({} if selector is None else {"project_id": selector})
+        refusal = target.handle_action("POST", "", "sha256=deadbeef", selector_body)
+        assert refusal[0] == 401
+        assert HEADER not in refusal[1]
+        assert json.loads(refusal[2])["error"]["class"] == "bad_signature"
+
+
+def test_reverse_secret_map_result_health_and_outbound_calls() -> None:
+    host = FakeHost()
+    captured = []
+    target = map_embassy(host, result_handler=captured.append)
+    result_body = fixture("analysis/result_callback.json")
+    result_response = target.handle_result("POST", sign(result_body, REVERSE_SECRET), result_body)
+    assert result_response[0] == 200
+    assert verify(result_response[1][HEADER], result_response[2], REVERSE_SECRET)
+    assert captured[0].project_id == PROJECT_ID
+
+    legacy_result = wire_json(
+        {"analysis_id": "run", "nonce": "nonce", "issued_at": "2026-06-20T00:00:00Z"}
+    )
+    legacy_response = target.handle_result(
+        "POST", sign(legacy_result, REVERSE_SECRET), legacy_result
+    )
+    assert legacy_response[0] == 401
+    assert HEADER not in legacy_response[1]
+    assert len(captured) == 1
+    unknown_result = wire_json(
+        {
+            "analysis_id": "run-unknown",
+            "project_id": "33333333-3333-3333-3333-333333333333",
+            "nonce": "nonce-unknown",
+            "issued_at": "2026-06-20T00:00:00Z",
+        }
+    )
+    unknown_result_response = target.handle_result("POST", "sha256=deadbeef", unknown_result)
+    assert unknown_result_response[0] == 401
+    assert HEADER not in unknown_result_response[1]
+    assert len(captured) == 1
+
+    query = fixture("actions/health_query.txt").rstrip(b"\n")
+    health = target.handle_action("GET", "/health", sign(query, REVERSE_SECRET), query)
+    assert health[0] == 200
+    assert verify(health[1][HEADER], health[2], REVERSE_SECRET)
+    unknown_query = b"project_id=33333333-3333-3333-3333-333333333333"
+    unknown_health = target.handle_action("GET", "/health", "sha256=deadbeef", unknown_query)
+    assert unknown_health == (404, {}, b"")
+
+    host.response = fixture("analysis/trigger_response.json")
+    target.start_analysis(AnalysisRequest(project_id=PROJECT_ID, body="hello", metadata={}))
+    assert host.last_request is not None
+    assert host.last_request.headers[HEADER] == sign(host.last_request.body, REVERSE_SECRET)
+    target.capture_sent_message(
+        SentMessageRequest(project_id=PROJECT_ID, session_id=SESSION_ID, sent_body="sent")
+    )
+    assert host.last_request.headers[HEADER] == sign(host.last_request.body, REVERSE_SECRET)
 
 
 def test_inbound_body_cap_precedes_authentication_on_both_routes() -> None:

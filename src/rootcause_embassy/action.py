@@ -7,6 +7,7 @@ import json
 import time
 import traceback
 from typing import Any
+from urllib.parse import parse_qs
 
 from .config import ActionContext, Config
 from .errors import (
@@ -65,6 +66,11 @@ class ActionPlane:
             return 405, {"Content-Type": "application/json", "Allow": "POST"}, payload
         if len(body) > self._config.max_body_bytes:
             refusal = invalid_request("request body exceeds max_body_bytes")
+            secret = self._config.secret_from_body(body)
+            if secret is None:
+                # The body cap is checked before authentication, but map mode cannot
+                # sign a refusal when its selector is unavailable.
+                return self._unsigned_refusal(refusal)
             return self._signed(
                 refusal.status,
                 {
@@ -74,28 +80,36 @@ class ActionPlane:
                         "message": refusal.message,
                     },
                 },
+                secret,
             )
-        return self._invocation(signature, body)
+        secret = self._config.secret_from_body(body)
+        if secret is None:
+            return self._unsigned_refusal(bad_signature())
+        return self._invocation(signature, body, secret)
 
     def _health(self, method: str, signature: str | None, raw_query: bytes) -> Response:
-        if method.upper() != "GET" or not verify(signature, raw_query, self._config.secret):
+        if method.upper() != "GET":
+            return 404, {}, b""
+        secret = self._health_secret(raw_query)
+        if secret is None or not verify(signature, raw_query, secret):
             return 404, {}, b""
         return self._signed(
             200,
             {
                 "ok": True,
                 "embassy": "python",
-                "version": "0.1.0",
+                "version": "0.2.0",
                 "protocol": 1,
                 "capabilities": _CAPABILITIES,
             },
+            secret,
         )
 
-    def _invocation(self, signature: str | None, body: bytes) -> Response:
+    def _invocation(self, signature: str | None, body: bytes, secret: str) -> Response:
         started = time.monotonic()
         deadline = started + self._config.total_deadline
         try:
-            if not verify(signature, body, self._config.secret):
+            if not verify(signature, body, secret):
                 raise bad_signature()
             invocation = _parse_invocation(body)
             tenant = extract_tenant(invocation, self._config.require_tenant_context)
@@ -127,10 +141,11 @@ class ActionPlane:
                         None,
                         _duration(started),
                     ),
+                    secret,
                 )
             if self._config.runner is None:
                 raise invalid_request("runtime python is not executable in this Embassy")
-            return self._run(started, deadline, action_id, digest, script, tenant, params)
+            return self._run(started, deadline, action_id, digest, script, tenant, params, secret)
         except Refusal as refusal:
             self._config.logger.warning(
                 "rootcause invocation refused",
@@ -145,6 +160,7 @@ class ActionPlane:
                         "message": refusal.message,
                     },
                 },
+                secret,
             )
         except Exception as error:
             self._config.logger.error(
@@ -160,6 +176,7 @@ class ActionPlane:
                         "message": type(error).__name__,
                     },
                 },
+                secret,
             )
 
     def _run(
@@ -171,6 +188,7 @@ class ActionPlane:
         script: str,
         tenant: Any,
         params: dict[str, Any],
+        secret: str,
     ) -> Response:
         execution_deadline = min(total_deadline, time.monotonic() + self._config.timeout)
         output = _CappedStringIO(self._config.max_stdout_bytes)
@@ -184,7 +202,11 @@ class ActionPlane:
         )
         if time.monotonic() >= execution_deadline:
             return self._execution_failure(
-                started, output, TimeoutError("invocation deadline elapsed before execution"), ""
+                started,
+                output,
+                TimeoutError("invocation deadline elapsed before execution"),
+                "",
+                secret,
             )
         try:
             assert self._config.runner is not None
@@ -203,7 +225,7 @@ class ActionPlane:
                     "error_type": type(error).__name__,
                 },
             )
-            return self._execution_failure(started, output, error, traceback.format_exc())
+            return self._execution_failure(started, output, error, traceback.format_exc(), secret)
         self._config.logger.info(
             "rootcause action executed",
             extra={
@@ -216,6 +238,7 @@ class ActionPlane:
         return self._signed(
             200,
             _result_envelope(True, return_value, output.getvalue(), None, _duration(started)),
+            secret,
         )
 
     def _execution_failure(
@@ -224,6 +247,7 @@ class ActionPlane:
         output: io.StringIO,
         error: BaseException,
         backtrace: str,
+        secret: str,
     ) -> Response:
         wire_error: dict[str, Any] = {
             "class": type(error).__name__,
@@ -233,9 +257,10 @@ class ActionPlane:
         return self._signed(
             200,
             _result_envelope(False, None, output.getvalue(), wire_error, _duration(started)),
+            secret,
         )
 
-    def _signed(self, status: int, payload: dict[str, Any]) -> Response:
+    def _signed(self, status: int, payload: dict[str, Any], secret: str) -> Response:
         try:
             body = _json_bytes(payload)
         except (TypeError, ValueError) as error:
@@ -251,9 +276,36 @@ class ActionPlane:
             )
         return (
             status,
-            {"Content-Type": "application/json", HEADER: sign(body, self._config.secret)},
+            {"Content-Type": "application/json", HEADER: sign(body, secret)},
             body,
         )
+
+    @staticmethod
+    def _unsigned_refusal(refusal: Refusal) -> Response:
+        body = _json_bytes(
+            {
+                "ok": False,
+                "error": {
+                    "class": refusal.error_class,
+                    "message": refusal.message,
+                },
+            }
+        )
+        return refusal.status, {"Content-Type": "application/json"}, body
+
+    def _health_secret(self, raw_query: bytes) -> str | None:
+        if not self._config.map_mode:
+            return self._config.secret_for_project(None)
+        try:
+            query = raw_query.decode("ascii")
+            values = parse_qs(query, keep_blank_values=True, strict_parsing=True).get(
+                "project_id", []
+            )
+        except (UnicodeDecodeError, ValueError):
+            return None
+        if len(values) != 1:
+            return None
+        return self._config.secret_for_project(values[0])
 
 
 def _parse_invocation(body: bytes) -> dict[str, Any]:

@@ -37,6 +37,7 @@ class AnalysisRequest:
     session_id: str = ""
     principal: Principal | None = None
     tenant: str = ""
+    project_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +67,7 @@ class SentMessageRequest:
     proposed_body: str = ""
     metadata: SentMessageMetadata = field(default_factory=SentMessageMetadata)
     answers: list[Answer] = field(default_factory=list)
+    project_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +81,7 @@ class AnalysisClient:
     def __init__(self, config: Config) -> None:
         self._config = config
 
-    def start_analysis(self, request: AnalysisRequest) -> Analysis:
+    def start_analysis(self, request: AnalysisRequest, project_id: str | None = None) -> Analysis:
         if not self._config.trigger_url:
             raise EmbassyError(0, "misconfigured", "TriggerURL is not configured")
         if not request.body:
@@ -109,8 +111,9 @@ class AnalysisClient:
         if request.tenant:
             payload["tenant"] = request.tenant
 
+        selected_project_id = request.project_id if project_id is None else project_id
         response = self._post_signed(
-            self._config.trigger_url, _json_bytes(payload), "analysis trigger"
+            self._config.trigger_url, _json_bytes(payload), "analysis trigger", selected_project_id
         )
         parsed = _response_object(response, "analysis trigger")
         analysis_id = _string(parsed.get("analysis_id"))
@@ -135,7 +138,9 @@ class AnalysisClient:
         )
         return analysis
 
-    def capture_sent_message(self, request: SentMessageRequest) -> SentMessage:
+    def capture_sent_message(
+        self, request: SentMessageRequest, project_id: str | None = None
+    ) -> SentMessage:
         if not self._config.sent_message_url:
             raise EmbassyError(0, "misconfigured", "SentMessageURL is not configured")
         if not request.session_id:
@@ -164,10 +169,12 @@ class AnalysisClient:
         payload["nonce"] = self._config.nonce()
         payload["issued_at"] = self._issued_at()
 
+        selected_project_id = request.project_id if project_id is None else project_id
         response = self._post_signed(
             self._config.sent_message_url,
             _json_bytes(payload),
             "sent-message capture",
+            selected_project_id,
         )
         self._config.logger.info(
             "rootcause sent-message captured",
@@ -187,13 +194,16 @@ class AnalysisClient:
             sent_message_id=_string(parsed.get("sent_message_id")),
         )
 
-    def _post_signed(self, url: str, body: bytes, label: str) -> bytes:
+    def _post_signed(self, url: str, body: bytes, label: str, project_id: str) -> bytes:
+        secret = self._config.secret_for_project(project_id)
+        if secret is None:
+            raise EmbassyError(0, "misconfigured", "project_id is required for reverse-secret map")
         request = HTTPRequest(
             method="POST",
             url=url,
             headers={
                 "Content-Type": "application/json",
-                HEADER: sign(body, self._config.secret),
+                HEADER: sign(body, secret),
             },
             body=body,
             timeout=self._config.timeout,
