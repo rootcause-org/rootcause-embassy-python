@@ -36,6 +36,18 @@ class ResultRoute:
                 }
             )
             return 405, {"Content-Type": "application/json", "Allow": "POST"}, method_body
+        if len(body) > self._config.max_body_bytes:
+            refusal = invalid_request("request body exceeds max_body_bytes")
+            return self._signed(
+                refusal.status,
+                {
+                    "ok": False,
+                    "error": {
+                        "class": refusal.error_class,
+                        "message": refusal.message,
+                    },
+                },
+            )
         nonce = ""
         consumed = False
         try:
@@ -66,8 +78,18 @@ class ResultRoute:
                 raise handler_error("ResultHandler is not configured")
             try:
                 self._config.result_handler(decode_result(payload))
+            except Refusal:
+                raise
             except BaseException as error:
-                raise handler_error(str(error) or type(error).__name__) from error
+                error_type = type(error).__name__
+                self._config.logger.error(
+                    "rootcause result handler failed",
+                    extra={
+                        "analysis_id": _string(payload["analysis_id"]),
+                        "error_type": error_type,
+                    },
+                )
+                raise Refusal(500, INTERNAL_ERROR, error_type) from error
             metadata = payload.get("metadata")
             metadata_keys = (
                 sorted(str(key) for key in metadata) if isinstance(metadata, dict) else []

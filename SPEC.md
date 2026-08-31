@@ -61,8 +61,9 @@ api planes next. Zero DentAI-specific code in this repo.
 9. **Result decode** (`Result` dataclass): tolerant-inbound; `notes[].key == "summary"` → `note`,
    `kind` legacy fallback; `draft` markdown-first; `actions[]` (with `slug`), `executed_actions[]`,
    `questions[]`, `delete[]` → `delete_ids`, `attachments`, `decline`, `metadata`. `ok` property =
-   no decline. `Config.result_handler: Callable[[Result], None]` — raising = signed 500
-   `handler_error`, unset = 500 `handler_error`.
+   no decline. `Config.result_handler: Callable[[Result], None]` — unset/unloadable = signed 500
+   `handler_error`; an unexpected handler exception = signed 500 `internal_error` whose message is
+   the exception class name only. A handler-raised contract `Refusal` propagates unchanged.
 10. **Chat** (`rootcause_embassy.chat`): `mint_embed_token(secret, Claims) -> str` with pinned claim
     order `sub,aud,iss,jti,origin,iat,nbf,exp,principal{kind,external_id,asserted_by,assurance},
     tenant?,locale?,color_scheme?` (optionals omitted, never null), header exactly
@@ -82,7 +83,8 @@ api planes next. Zero DentAI-specific code in this repo.
     `ROOTCAUSE_CHAT_SECRET`, `ROOTCAUSE_CHAT_PROJECT`, `ROOTCAUSE_CHAT_BASE_URL`. Determinism seams:
     `now: Callable[[], float]` (unix seconds), `nonce: Callable[[], str]`,
     `transport: Callable[[HTTPRequest], HTTPResponse]` (default urllib, 20s timeout) — the
-    conformance suite injects all three; no live server needed.
+    conformance suite injects all three; no live server needed. `max_body_bytes` defaults to 8 MiB
+    and both inbound routes check it before authentication/decoding.
 13. **Logging**: stdlib `logging` logger `rootcause_embassy`; identifiers, shapes, byte counts only.
     `internal_error` message = exception class name only.
 14. **Taxonomy**: project / run / session / principal / tenant tuple / action / Embassy. No aliases.

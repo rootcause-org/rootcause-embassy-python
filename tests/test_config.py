@@ -25,6 +25,8 @@ def test_config_validation_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None
         Config(secret="secret")
     with pytest.raises(Misconfigured, match="TotalDeadline"):
         Config(secret="secret", fetch_url=FETCH, timeout=23)
+    with pytest.raises(Misconfigured, match="byte caps"):
+        Config(secret="secret", fetch_url=FETCH, max_body_bytes=0)
     with pytest.raises(Misconfigured, match="APIBaseURL"):
         Config(secret="secret", fetch_url=FETCH, api_key="rcor_x")
     with pytest.raises(Misconfigured, match="ChatProject"):

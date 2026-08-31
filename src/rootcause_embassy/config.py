@@ -60,6 +60,7 @@ class Config:
     clock_skew: float = 300.0
     require_tenant_context: bool = False
     cache_dir: str = ""
+    max_body_bytes: int = 8 * 1024 * 1024
     max_stdout_bytes: int = 64 * 1024
     max_attachment_bytes: int = 256 * 1024
     nonce_store: NonceStore = field(default_factory=MemoryNonceStore)
@@ -97,7 +98,7 @@ class Config:
             raise Misconfigured("TotalDeadline must exceed Timeout")
         if self.clock_skew <= 0:
             raise Misconfigured("ClockSkew must be positive")
-        if self.max_stdout_bytes <= 0 or self.max_attachment_bytes <= 0:
+        if self.max_body_bytes <= 0 or self.max_stdout_bytes <= 0 or self.max_attachment_bytes <= 0:
             raise Misconfigured("byte caps must be positive")
         self._validate_api()
         self._validate_chat()

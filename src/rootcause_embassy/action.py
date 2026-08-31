@@ -63,6 +63,18 @@ class ActionPlane:
                 }
             )
             return 405, {"Content-Type": "application/json", "Allow": "POST"}, payload
+        if len(body) > self._config.max_body_bytes:
+            refusal = invalid_request("request body exceeds max_body_bytes")
+            return self._signed(
+                refusal.status,
+                {
+                    "ok": False,
+                    "error": {
+                        "class": refusal.error_class,
+                        "message": refusal.message,
+                    },
+                },
+            )
         return self._invocation(signature, body)
 
     def _health(self, method: str, signature: str | None, raw_query: bytes) -> Response:
@@ -252,11 +264,11 @@ def _parse_invocation(body: bytes) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise invalid_request("body is not valid JSON")
 
-    fields = ("action_id", "script_digest", "project_id", "nonce", "issued_at", "runtime")
+    fields = ("action_id", "script_digest", "project_id", "nonce", "issued_at")
     missing = sorted(field for field in fields if not _string(raw.get(field)))
     if missing:
         raise invalid_request(f"missing field(s): {', '.join(missing)}")
-    if raw["runtime"] != "python":
+    if "runtime" in raw and raw["runtime"] != "python":
         raise invalid_request(f"unsupported runtime: {raw['runtime']}")
     if "dry_run" in raw and not isinstance(raw["dry_run"], bool):
         raise invalid_request("dry_run must be a boolean")

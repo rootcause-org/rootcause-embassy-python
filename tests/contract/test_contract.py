@@ -26,7 +26,7 @@ from rootcause_embassy import (
     verify,
     widget_tag_html,
 )
-from rootcause_embassy.errors import Misconfigured
+from rootcause_embassy.errors import Misconfigured, Refusal
 from rootcause_embassy.http import HTTPRequest, HTTPResponse
 
 DATA = Path(__file__).parent / "testdata"
@@ -269,6 +269,10 @@ def test_refusal_envelopes_and_guardrails() -> None:
     ruby = fixture("actions/invocation_flat.json")
     assert_class(post_action(embassy(ruby_host), ruby), 400, "invalid_request")
 
+    optional_runtime_host = FakeHost()
+    optional_runtime_body = invocation(optional_runtime_host, runtime=None)
+    assert post_action(embassy(optional_runtime_host), optional_runtime_body)[0] == 200
+
     dry_type_host = FakeHost()
     dry_type_body = invocation(dry_type_host, dry_run="true")
     assert_class(post_action(embassy(dry_type_host), dry_type_body), 400, "invalid_request")
@@ -338,6 +342,16 @@ def test_method_not_allowed_and_health() -> None:
     assert response[2].decode() == expected
 
 
+def test_inbound_body_cap_precedes_authentication_on_both_routes() -> None:
+    target = embassy(FakeHost(), max_body_bytes=4)
+    oversized = b"12345"
+    assert_class(target.handle_action("POST", "", None, oversized), 400, "invalid_request")
+    assert_class(target.handle_result("POST", None, oversized), 400, "invalid_request")
+    assert target.handle_action("PUT", "", None, oversized)[0] == 405
+    assert target.handle_action("GET", "/health", None, oversized)[0] == 404
+    assert target.handle_result("PUT", None, oversized)[0] == 405
+
+
 def test_result_callback_decode_and_ack() -> None:
     captured = []
     target = embassy(FakeHost(), result_handler=captured.append)
@@ -382,7 +396,9 @@ def test_result_redelivery_semantics() -> None:
             raise RuntimeError("database down")
 
     retry_target = embassy(FakeHost(), result_handler=flaky)
-    assert retry_target.handle_result("POST", signature, body)[0] == 500
+    first_failure = retry_target.handle_result("POST", signature, body)
+    assert_class(first_failure, 500, "internal_error")
+    assert json.loads(first_failure[2])["error"]["message"] == "RuntimeError"
     assert retry_target.handle_result("POST", signature, body)[0] == 200
     assert attempts == 2
 
@@ -413,9 +429,23 @@ def test_result_redelivery_semantics() -> None:
 
     base_target = embassy(FakeHost(), result_handler=raises_base)
     first = base_target.handle_result("POST", signature, body)
-    assert_class(first, 500, "handler_error")
+    assert_class(first, 500, "internal_error")
+    assert json.loads(first[2])["error"]["message"] == "BaseException"
     assert base_target.handle_result("POST", signature, body)[0] == 200
     assert base_attempts == 2
+
+    def deliberate_refusal(result) -> None:
+        raise Refusal(422, "schema_violation", "customer refusal")
+
+    refusal_target = embassy(FakeHost(), result_handler=deliberate_refusal)
+    deliberate = refusal_target.handle_result("POST", signature, body)
+    assert_class(deliberate, 422, "schema_violation")
+    assert json.loads(deliberate[2])["error"]["message"] == "customer refusal"
+    assert_class(
+        refusal_target.handle_result("POST", signature, body),
+        422,
+        "schema_violation",
+    )
 
 
 @pytest.mark.parametrize(

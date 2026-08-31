@@ -56,59 +56,118 @@ The package is framework-agnostic: adapters only translate request bytes and the
 its thread pool.
 
 ```python
-from litestar import Request, Response, route
+from litestar import Request, Response, get, post, route
+
+NON_POST_METHODS = ["GET", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"]
 
 
-@route(
-    ["/rootcause/action", "/rootcause/action/health"],
-    http_method=["GET", "POST", "PUT", "DELETE"],
-    sync_to_thread=True,
-)
-def rootcause_action(request: Request, data: bytes = b"") -> Response[bytes]:
-    subpath = request.url.path.removeprefix("/rootcause/action")
-    signed_bytes = request.url.query.encode() if request.method == "GET" else data
-    status, headers, body = embassy.handle_action(
-        request.method, subpath, request.headers.get("X-Webhook-Signature"), signed_bytes
-    )
+def embassy_response(result: tuple[int, dict[str, str], bytes]) -> Response[bytes]:
+    status, headers, body = result
     return Response(body, status_code=status, headers=headers, media_type=None)
 
 
-@route("/rootcause/result", http_method=["POST", "GET"], sync_to_thread=True)
-def rootcause_result(request: Request, data: bytes = b"") -> Response[bytes]:
-    status, headers, body = embassy.handle_result(
-        request.method, request.headers.get("X-Webhook-Signature"), data
+@post("/rootcause/action", sync_to_thread=True)
+def rootcause_action_post(request: Request, data: bytes) -> Response[bytes]:
+    return embassy_response(
+        embassy.handle_action("POST", "", request.headers.get("X-Webhook-Signature"), data)
     )
-    return Response(body, status_code=status, headers=headers, media_type=None)
+
+
+@route("/rootcause/action", http_method=NON_POST_METHODS, sync_to_thread=True)
+def rootcause_action_probe(request: Request) -> Response[bytes]:
+    return embassy_response(embassy.handle_action(request.method, "", None, b""))
+
+
+@get("/rootcause/action/health", sync_to_thread=True)
+def rootcause_action_health(request: Request) -> Response[bytes]:
+    raw_query = str(request.url.query).encode()
+    return embassy_response(
+        embassy.handle_action(
+            "GET",
+            "/health",
+            request.headers.get("X-Webhook-Signature"),
+            raw_query,
+        )
+    )
+
+
+@post("/rootcause/result", sync_to_thread=True)
+def rootcause_result_post(request: Request, data: bytes) -> Response[bytes]:
+    return embassy_response(
+        embassy.handle_result("POST", request.headers.get("X-Webhook-Signature"), data)
+    )
+
+
+@route("/rootcause/result", http_method=NON_POST_METHODS, sync_to_thread=True)
+def rootcause_result_probe(request: Request) -> Response[bytes]:
+    return embassy_response(embassy.handle_result(request.method, None, b""))
 ```
+
+The Litestar adapter is illustrative and is not executed by this package's test suite. Configure
+Litestar or the ASGI server to reject request bodies above `Config.max_body_bytes` before buffering;
+the Embassy repeats the 8 MiB check after receiving bytes.
 
 ### FastAPI mount
 
-FastAPI also runs ordinary `def` route functions in its thread pool.
+FastAPI runs ordinary `def` route functions in its thread pool. The async dependency reads the
+exact raw POST bytes before dispatching the sync handler.
 
 ```python
-from fastapi import Body, FastAPI, Request, Response
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, Request, Response
 
 app = FastAPI()
+NON_POST_METHODS = ["GET", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"]
 
 
-@app.api_route("/rootcause/action", methods=["GET", "POST", "PUT", "DELETE"])
-@app.api_route("/rootcause/action/{child:path}", methods=["GET", "POST", "PUT", "DELETE"])
-def rootcause_action(request: Request, child: str = "", data: bytes = Body(b"")) -> Response:
-    signed_bytes = request.url.query.encode() if request.method == "GET" else data
-    subpath = f"/{child}" if child else ""
-    status, headers, body = embassy.handle_action(
-        request.method, subpath, request.headers.get("X-Webhook-Signature"), signed_bytes
-    )
+async def raw_body(request: Request) -> bytes:
+    return await request.body()
+
+
+def embassy_response(result: tuple[int, dict[str, str], bytes]) -> Response:
+    status, headers, body = result
     return Response(body, status_code=status, headers=headers, media_type=None)
 
 
-@app.api_route("/rootcause/result", methods=["POST", "GET"])
-def rootcause_result(request: Request, data: bytes = Body(b"")) -> Response:
-    status, headers, body = embassy.handle_result(
-        request.method, request.headers.get("X-Webhook-Signature"), data
+@app.post("/rootcause/action")
+def rootcause_action_post(request: Request, data: Annotated[bytes, Depends(raw_body)]) -> Response:
+    return embassy_response(
+        embassy.handle_action("POST", "", request.headers.get("X-Webhook-Signature"), data)
     )
-    return Response(body, status_code=status, headers=headers, media_type=None)
+
+
+@app.api_route("/rootcause/action", methods=NON_POST_METHODS)
+def rootcause_action_probe(request: Request) -> Response:
+    return embassy_response(embassy.handle_action(request.method, "", None, b""))
+
+
+@app.get("/rootcause/action/health")
+def rootcause_action_health(request: Request) -> Response:
+    return embassy_response(
+        embassy.handle_action(
+            "GET",
+            "/health",
+            request.headers.get("X-Webhook-Signature"),
+            request.url.query.encode(),
+        )
+    )
+
+
+@app.post("/rootcause/result")
+def rootcause_result_post(request: Request, data: Annotated[bytes, Depends(raw_body)]) -> Response:
+    return embassy_response(
+        embassy.handle_result("POST", request.headers.get("X-Webhook-Signature"), data)
+    )
+
+
+@app.api_route("/rootcause/result", methods=NON_POST_METHODS)
+def rootcause_result_probe(request: Request) -> Response:
+    return embassy_response(embassy.handle_result(request.method, None, b""))
 ```
+
+Set an ASGI-server or reverse-proxy request limit no larger than `Config.max_body_bytes`; the core
+limit cannot prevent the framework from buffering an oversized request first.
 
 ## Registering an action runner
 
@@ -152,7 +211,7 @@ deadline into your I/O and make actions idempotent; a timeout is not a transacti
 | Step | Refusal |
 |---|---|
 | verify HMAC over the exact request bytes | `401 bad_signature` |
-| parse required fields and require `runtime: "python"` | `400 invalid_request` |
+| parse required fields; validate optional `runtime` when present | `400 invalid_request` |
 | validate the tenant tuple | `400 invalid_request` |
 | require fresh `issued_at` and an unseen `nonce` | `409 replay` |
 | re-validate params against the invocation schema | `422 schema_violation` |
