@@ -10,8 +10,9 @@ Read [../../../AGENTS.md](../../../AGENTS.md), then read the authority in
 
 ## Route by intent
 
-- Actions/signing/replay: `signature.py`, `replay.py`, `tenant.py`, `schema.py`, `resolver.py`,
-  `action.py`.
+- Actions/signing/replay: `signature.py`, `replay.py`, `tenant.py`, `action_principal.py`,
+  `schema.py`, `resolver.py`, `action.py`. `ActionContext.principal` is the immutable, per-invocation
+  host assertion for in-process runners; action params and schemas cannot select it.
 - Analysis callback/result shape: `result.py`, `resultroute.py`.
 - Analysis outbound messages: `client.py`.
 - Chat key/JWT/widget: `chat.py`.

@@ -219,6 +219,57 @@ def test_action_round_trip_and_tenant() -> None:
     assert host.last_request.headers[HEADER] == sign(raw_query.encode(), REVERSE_SECRET)
 
 
+def test_action_principal_is_immutable_and_invocation_scoped() -> None:
+    host = FakeHost()
+    contexts: list[ActionContext] = []
+
+    def runner(ctx: ActionContext, params: dict[str, Any]) -> Any:
+        contexts.append(ctx)
+        return {"principal": ctx.principal.external_id if ctx.principal else None}
+
+    principal = {
+        "kind": "acme_user",
+        "external_id": "user-8f3",
+        "claims": {"user_id": "user-8f3", "person_id": 103, "backup_ids": ["backup-7", "backup-9"]},
+    }
+    target = embassy(host, runner=runner)
+    principal_response = post_action(target, invocation(host, principal=principal))
+    assert principal_response[0] == 200
+    assert post_action(target, invocation(host, nonce="nonce-principal-less"))[0] == 200
+
+    asserted = contexts[0].principal
+    assert asserted is not None
+    assert asserted.kind == "acme_user"
+    assert asserted.external_id == "user-8f3"
+    assert dict(asserted.claims) == {
+        "user_id": "user-8f3",
+        "person_id": 103,
+        "backup_ids": ("backup-7", "backup-9"),
+    }
+    with pytest.raises(TypeError):
+        asserted.claims["user_id"] = "other"  # type: ignore[index]
+    assert contexts[1].principal is None
+
+
+@pytest.mark.parametrize(
+    "principal",
+    [
+        {},
+        {"kind": "acme_user", "external_id": "user-8f3"},
+        {"kind": "", "external_id": "user-8f3", "claims": {}},
+        {"kind": "acme_user", "external_id": "user-8f3", "claims": {"Bad": "x"}},
+        {"kind": "acme_user", "external_id": "user-8f3", "claims": {"id": True}},
+        {"kind": "acme_user", "external_id": "user-8f3", "claims": {"ids": ["x", 1]}},
+        {"kind": "acme_user\x00bad", "external_id": "user-8f3", "claims": {}},
+    ],
+)
+def test_action_principal_shape_is_validated(principal: dict[str, Any]) -> None:
+    host = FakeHost()
+    response = post_action(embassy(host), invocation(host, principal=principal))
+    assert_class(response, 400, "invalid_request")
+    assert host.last_request is None
+
+
 def test_dry_run_and_success_envelope_shape() -> None:
     host = FakeHost()
     target = embassy(host, runner=None)
@@ -571,9 +622,9 @@ def test_result_redelivery_semantics() -> None:
                 session_id=SESSION_ID,
                 tenant="acme",
                 principal=Principal(
-                    kind="kampadmin_admin",
+                    kind="acme_user",
                     external_id="user-8f3",
-                    asserted_by="kampadmin",
+                    asserted_by="acme",
                     assurance="customer_backend_jwt",
                     tenant_hint="acme",
                 ),
@@ -633,10 +684,10 @@ def assert_outbound(host: FakeHost, golden: str) -> None:
 def test_chat_jwt_and_widget_vectors() -> None:
     vector = json_fixture("chat/jwt_vector.json")
     claims = Claims(
-        project="kampadmin",
+        project="acme",
         external_id="user-8f3",
-        kind="kampadmin_admin",
-        origin="https://admin.kampadmin.be",
+        kind="acme_user",
+        origin="https://app.acme.example",
         tenant="acme",
         locale="nl",
         color_scheme="light",
@@ -652,7 +703,7 @@ def test_chat_jwt_and_widget_vectors() -> None:
     tag = widget_tag_html(
         Widget(
             base_url="https://app.replypen.com",
-            project="kampadmin",
+            project="acme",
             token=token,
             mode="page",
             target="#rc-chat",

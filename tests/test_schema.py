@@ -32,3 +32,10 @@ def test_schema_reserved_names_refused_in_params_and_schema() -> None:
         validate_params({}, {"tenant_id": {"type": "string", "required": False}})
     with pytest.raises(Refusal, match="reserved"):
         validate_params({}, {"rc_tenant_custom": {"type": "string"}})
+    with pytest.raises(Refusal, match="reserved"):
+        validate_params(
+            {"principal_kind": "acme_user"},
+            {"principal_kind": {"type": "string"}},
+        )
+    with pytest.raises(Refusal, match="reserved"):
+        validate_params({}, {"RC_Principal_Custom": {"type": "string"}})

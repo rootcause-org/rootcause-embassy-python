@@ -206,6 +206,7 @@ def run_action(ctx: ActionContext, params: dict[str, Any]) -> Any:
         "__builtins__": {"len": len, "str": str},  # your explicit policy
         "params": MappingProxyType(params),  # data, never interpolated into source
         "tenant": ctx.tenant,  # trusted typed tuple, never params/env
+        "principal": ctx.principal,  # host-stamped identity, only for this invocation
         "out": ctx.out,  # captured stdout, capped at 64 KiB
     }
     exec(compile(ctx.script, f"<rootcause:{ctx.digest}>", "exec"), scope)
@@ -228,6 +229,7 @@ deadline into your I/O and make actions idempotent; a timeout is not a transacti
 | verify HMAC over the exact request bytes | `401 bad_signature` |
 | parse required fields; validate optional `runtime` when present | `400 invalid_request` |
 | validate the tenant tuple | `400 invalid_request` |
+| validate optional host-stamped principal context | `400 invalid_request` |
 | require fresh `issued_at` and an unseen `nonce` | `409 replay` |
 | re-validate params against the invocation schema | `422 schema_violation` |
 | signed script fetch plus digest/runtime verification | `502 resolve_failed` |

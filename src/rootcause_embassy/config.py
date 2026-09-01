@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+from .action_principal import ActionPrincipal
 from .errors import Misconfigured
 from .http import HTTPRequest, HTTPResponse, urllib_transport
 from .replay import MemoryNonceStore, NonceStore
@@ -36,6 +37,7 @@ class ActionContext:
     tenant: Tenant | None
     out: io.StringIO
     deadline: float
+    principal: ActionPrincipal | None = None
 
 
 def _new_nonce() -> str:

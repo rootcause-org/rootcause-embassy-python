@@ -16,12 +16,16 @@ _RESERVED = {
     "rc_tenant_id",
     "rc_tenant_slug",
     "rc_tenant_scope_value",
+    "principal_kind",
+    "principal_external_id",
 }
 
 
 def _reserved(name: str) -> bool:
     folded = name.casefold()
-    return folded in _RESERVED or folded.startswith("rc_tenant_")
+    return (
+        folded in _RESERVED or folded.startswith("rc_tenant_") or folded.startswith("rc_principal_")
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +46,7 @@ def validate_params(raw_params: Any, raw_schema: Any) -> dict[str, Any]:
     reserved = sorted({name for name in (*params, *specs) if _reserved(name)})
     if reserved:
         raise schema_violation(
-            f"tenant scope is host-owned; reserved param(s): {', '.join(reserved)}"
+            f"tenant and principal scope are host-owned; reserved param(s): {', '.join(reserved)}"
         )
     unknown = sorted(set(params) - set(specs))
     if unknown:

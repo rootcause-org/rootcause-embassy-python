@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from .action import ActionPlane, Response
+from .action_principal import ActionPrincipal
 from .api import API, APIResponse
 from .chat import Claims, Widget, mint_embed_token, widget_tag_html
 from .client import (
@@ -101,6 +102,7 @@ __all__ = [
     "APIResponse",
     "Action",
     "ActionContext",
+    "ActionPrincipal",
     "Analysis",
     "AnalysisRequest",
     "Answer",

@@ -9,6 +9,7 @@ import traceback
 from typing import Any
 from urllib.parse import parse_qs
 
+from .action_principal import ActionPrincipal, extract_action_principal
 from .config import ActionContext, Config
 from .errors import (
     INTERNAL_ERROR,
@@ -113,6 +114,7 @@ class ActionPlane:
                 raise bad_signature()
             invocation = _parse_invocation(body)
             tenant = extract_tenant(invocation, self._config.require_tenant_context)
+            principal = extract_action_principal(invocation)
             issued_at = _required_string(invocation, "issued_at")
             check_freshness(issued_at, self._config.clock_skew, self._config.now())
             nonce = _required_string(invocation, "nonce")
@@ -145,7 +147,9 @@ class ActionPlane:
                 )
             if self._config.runner is None:
                 raise invalid_request("runtime python is not executable in this Embassy")
-            return self._run(started, deadline, action_id, digest, script, tenant, params, secret)
+            return self._run(
+                started, deadline, action_id, digest, script, tenant, principal, params, secret
+            )
         except Refusal as refusal:
             self._config.logger.warning(
                 "rootcause invocation refused",
@@ -187,6 +191,7 @@ class ActionPlane:
         digest: str,
         script: str,
         tenant: Any,
+        principal: ActionPrincipal | None,
         params: dict[str, Any],
         secret: str,
     ) -> Response:
@@ -197,6 +202,7 @@ class ActionPlane:
             digest=digest,
             script=script,
             tenant=tenant,
+            principal=principal,
             out=output,
             deadline=execution_deadline,
         )
