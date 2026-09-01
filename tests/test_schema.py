@@ -39,3 +39,8 @@ def test_schema_reserved_names_refused_in_params_and_schema() -> None:
         )
     with pytest.raises(Refusal, match="reserved"):
         validate_params({}, {"RC_Principal_Custom": {"type": "string"}})
+    with pytest.raises(Refusal, match="reserved"):
+        validate_params(
+            {"principal_claim_user_id": "user-8f3"},
+            {"principal_claim_user_id": {"type": "string"}},
+        )

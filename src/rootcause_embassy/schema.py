@@ -24,7 +24,10 @@ _RESERVED = {
 def _reserved(name: str) -> bool:
     folded = name.casefold()
     return (
-        folded in _RESERVED or folded.startswith("rc_tenant_") or folded.startswith("rc_principal_")
+        folded in _RESERVED
+        or folded.startswith("rc_tenant_")
+        or folded.startswith("rc_principal_")
+        or folded.startswith("principal_claim_")
     )
 
 
