@@ -81,6 +81,16 @@
       "note": ""
     },
     {
+      "name": "result_action_error",
+      "file": "actions/result_action_error.json",
+      "direction": "embassy->host",
+      "secret": "contract-reverse-secret",
+      "body_bytes": 329,
+      "body_sha256": "482988a10d5bd67a1e58b452b2b75b434d535c3a87a5b14b9eb77b880bc612f5",
+      "signature": "sha256=29777498704b7049a344184d2594eaed52597804d5f77b7dcfd62d8757ac9616",
+      "note": "HTTP 200; script raised - backtrace is a newline-joined STRING, never an array"
+    },
+    {
       "name": "result_refusal_bad_signature",
       "file": "actions/result_refusal_bad_signature.json",
       "direction": "embassy->host",
@@ -155,9 +165,9 @@
       "file": "analysis/result_callback.json",
       "direction": "host->embassy",
       "secret": "contract-reverse-secret",
-      "body_bytes": 1347,
-      "body_sha256": "391c3979353c367002de0ffb61c300195e0bde0577d044f4a967107b9031449e",
-      "signature": "sha256=a4296d57fd15bf2f812f3b18ba01f18b2c28040a74504f215c6c72c63b0b4421",
+      "body_bytes": 1409,
+      "body_sha256": "a608288e0985986b8d95e558e42bc887c2de7f5d9543f86857fefa470a745e9b",
+      "signature": "sha256=9d604817007b60e17dc5ff346b144b9b11596b94eaef0bc4596aba3872c67a2e",
       "note": "nonce == analysis_id == run_id"
     },
     {

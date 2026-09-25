@@ -17,6 +17,8 @@ from .errors import Misconfigured
 DEFAULT_TTL = 7200
 DEFAULT_ASSURANCE = "customer_backend_jwt"
 _HEADER = b'{"alg":"HS256","typ":"JWT"}'
+# Loader contract revision (hub decisions.md #19).
+LOADER_PATH = "/chat/widget/v1/loader.js?v=3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,7 +130,7 @@ def widget_tag_html(widget: Widget) -> str:
     if not widget.token:
         raise Misconfigured("chat token is required")
     attributes = [
-        ("src", widget.base_url.rstrip("/") + "/chat/widget/v1/loader.js?v=2"),
+        ("src", widget.base_url.rstrip("/") + LOADER_PATH),
         ("data-rc-project", widget.project),
         ("data-rc-token", widget.token),
     ]
