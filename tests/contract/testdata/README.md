@@ -41,6 +41,7 @@ actions/
   invocation_flat.json                  no tenant tuple, no dry_run (dry_run emitted iff true)
   invocation_tenant.json                full tenant tuple
   invocation_principal.json             tenant tuple + host-stamped principal and typed claims
+  invocation_attachments.json           parameter-keyed inline file + unavailable descriptor
   invocation_dry_run.json               dry_run: true
   script_fetch_query.txt                the RAW query string the GET signature covers
   health_query.txt                      map-mode health GET raw query
@@ -52,6 +53,7 @@ actions/
   result_refusal_replay.json            409
   result_refusal_schema_violation.json  422
   result_refusal_resolve_failed.json    502
+  health_response_attachments.json      supporting receiver capability
   health_response.json                  signed GET {mount}/health
 analysis/
   trigger.json                          minimal: no session, no principal, no tenant
@@ -63,13 +65,14 @@ analysis/
   answers.json                          answers-only variant (no sent body)
 chat/
   jwt_vector.json                       secret + claims + iat → the exact token string
+  jwt_vector_credentials.json           the same with a `credentials` claim (keys sorted)
   widget_tag.html                       the loader <script> tag, ?v=3
   sse_frames.jsonl                      redacted decoded data frames from one complete SSE turn
 ```
 
 ## What a conformance suite asserts
 
-The full per-plane case list is [`../conformance.md`](../conformance.md); the seven points below are
+The full per-plane case list is [`../conformance.md`](../conformance.md); the points below are
 the spine.
 
 1. **Verify** — for each entry in `signing_vectors.json.bodies`, HMAC-SHA256 the referenced file's
@@ -84,7 +87,7 @@ the spine.
    `delete[]`.
 4. **Errors** — assert your status ↔ `class` table against the four refusal fixtures.
 5. **Refusal is signed** — assert every non-2xx you produce also carries a valid signature.
-6. **Chat** — replay `jwt_vector.json` to the **exact** `token` string, and assert `alg` is checked
+6. **Chat** — replay `jwt_vector.json` and `jwt_vector_credentials.json` to the **exact** `token` string, and assert `alg` is checked
    before the signature.
 7. **Replay** — a duplicate nonce is `409` on the action route; on the result route it is a `200` ack
    after a successful dispatch, and a real re-dispatch after a failed one (the nonce is released).

@@ -228,6 +228,7 @@ deadline into your I/O and make actions idempotent; a timeout is not a transacti
 |---|---|
 | verify HMAC over the exact request bytes | `401 bad_signature` |
 | parse required fields; validate optional `runtime` when present | `400 invalid_request` |
+| refuse malformed or nonempty inline action `attachments`, including dry-run | `400 invalid_request` |
 | validate the tenant tuple | `400 invalid_request` |
 | validate optional host-stamped principal context | `400 invalid_request` |
 | require fresh `issued_at` and an unseen `nonce` | `409 replay` |
@@ -238,6 +239,11 @@ deadline into your I/O and make actions idempotent; a timeout is not a transacti
 
 Every outcome is signed, including refusals. The deliberate exceptions are the unsigned
 `405 + Allow: POST` mount probe and the unsigned `404` returned by an unauthenticated health probe.
+
+Inline action attachments are not supported: a nonempty or malformed `attachments` field is refused
+before script resolution or execution, even on dry-run. An absent field or empty object preserves
+normal behavior. Health does not advertise `attachments_inline`. The inbound body limit remains
+8 MiB by default; enforce it before buffering in your HTTP adapter.
 
 ## Async analysis
 

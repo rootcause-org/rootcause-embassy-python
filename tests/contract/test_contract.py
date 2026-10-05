@@ -288,6 +288,86 @@ def test_dry_run_and_success_envelope_shape() -> None:
     assert list(json.loads(success[2])) == list(json.loads(fixture("actions/result_ok.json")))
 
 
+def test_inline_attachment_fixture_metadata() -> None:
+    payload = json_fixture("actions/invocation_attachments.json")
+    descriptors = payload["attachments"]["attachments"]
+    assert payload["schema"]["attachments"]["type"] == "string[]"
+    assert [item["attachment_id"] for item in descriptors] == payload["params"]["attachments"]
+    present, unavailable = descriptors
+    assert present["filename"] == "hello.txt"
+    assert present["mime_type"] == "text/plain"
+    assert present["size_bytes"] == 5
+    assert present["sha256"] == hashlib.sha256(b"hello").hexdigest()
+    assert present["content_base64"] == "aGVsbG8="
+    assert unavailable["filename"] == "missing.mp4"
+    assert unavailable["mime_type"] == "video/mp4"
+    assert unavailable["size_bytes"] == 123
+    assert unavailable["error"] == "unavailable"
+    assert "content_base64" not in unavailable and "sha256" not in unavailable
+    assert (
+        "attachments_inline"
+        in json_fixture("actions/health_response_attachments.json")["capabilities"]
+    )
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize(
+    "attachments",
+    [
+        json_fixture("actions/invocation_attachments.json")["attachments"],
+        {"attachments": []},
+        {"unknown_param": [{"attachment_id": "bad-uuid"}]},
+        None,
+        [],
+        "bad-shape",
+        False,
+        0,
+    ],
+)
+def test_inline_attachments_refuse_before_fetch_or_run(attachments: Any, dry_run: bool) -> None:
+    host = FakeHost()
+    calls: list[dict[str, Any]] = []
+
+    def runner(ctx: ActionContext, params: dict[str, Any]) -> None:
+        calls.append(params)
+
+    payload = json_fixture("actions/invocation_attachments.json")
+    payload.update(
+        runtime="python", script_digest=host.digest, dry_run=dry_run, attachments=attachments
+    )
+    response = post_action(embassy(host, runner=runner), wire_json(payload))
+    assert_class(response, 400, "invalid_request")
+    assert "attachments" in json.loads(response[2])["error"]["message"]
+    assert host.last_request is None
+    assert calls == []
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("include_empty_map", [False, True])
+def test_absent_or_empty_inline_attachments_preserve_execution(
+    dry_run: bool, include_empty_map: bool
+) -> None:
+    host = FakeHost()
+    calls: list[dict[str, Any]] = []
+
+    def runner(ctx: ActionContext, params: dict[str, Any]) -> bool:
+        calls.append(params)
+        return True
+
+    payload = json_fixture("actions/invocation_attachments.json")
+    payload.update(runtime="python", script_digest=host.digest, dry_run=dry_run)
+    if include_empty_map:
+        payload["attachments"] = {}
+    else:
+        del payload["attachments"]
+    response = post_action(embassy(host, runner=runner), wire_json(payload))
+    assert_signed(response)
+    assert response[0] == 200
+    assert json.loads(response[2])["ok"] is True
+    assert host.last_request is not None
+    assert calls == ([] if dry_run else [payload["params"]])
+
+
 def normalize_duration(body: str) -> str:
     marker = '"duration_ms":'
     index = body.index(marker)
@@ -410,6 +490,7 @@ def test_method_not_allowed_and_health() -> None:
         .replace('"version":"0.5.0"', '"version":"0.2.0"')
     )
     assert response[2].decode() == expected
+    assert "attachments_inline" not in json.loads(response[2])["capabilities"]
 
 
 def test_reverse_secret_map_action_hit_and_selector_failures() -> None:
@@ -479,6 +560,7 @@ def test_reverse_secret_map_result_health_and_outbound_calls() -> None:
     health = target.handle_action("GET", "/health", sign(query, REVERSE_SECRET), query)
     assert health[0] == 200
     assert verify(health[1][HEADER], health[2], REVERSE_SECRET)
+    assert "attachments_inline" not in json.loads(health[2])["capabilities"]
     unknown_query = b"project_id=33333333-3333-3333-3333-333333333333"
     unknown_health = target.handle_action("GET", "/health", "sha256=deadbeef", unknown_query)
     assert unknown_health == (404, {}, b"")

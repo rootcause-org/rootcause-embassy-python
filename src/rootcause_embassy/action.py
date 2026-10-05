@@ -330,6 +330,11 @@ def _parse_invocation(body: bytes) -> dict[str, Any]:
         raise invalid_request(f"unsupported runtime: {raw['runtime']}")
     if "dry_run" in raw and not isinstance(raw["dry_run"], bool):
         raise invalid_request("dry_run must be a boolean")
+    if "attachments" in raw:
+        if not isinstance(raw["attachments"], dict):
+            raise invalid_request("attachments must be an object")
+        if raw["attachments"]:
+            raise invalid_request("inline action attachments are not supported in this Embassy")
     return raw
 
 

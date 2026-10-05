@@ -14,6 +14,9 @@ Read [../../../AGENTS.md](../../../AGENTS.md), then read the authority in
   `schema.py`, `resolver.py`, `action.py`. `ActionContext.principal` is the immutable, per-invocation
   host assertion for in-process runners; its `claims` mapping is always present (possibly empty), and
   action params/schemas cannot select principal selectors or `principal_claim_*` fields.
+  Inline action attachments are unsupported: `action.py` refuses any malformed or nonempty
+  `attachments` envelope before resolution, including dry-run. Absence/empty maps remain accepted;
+  health must not advertise `attachments_inline` until invocation-scoped materialization exists.
 - Analysis callback/result shape: `result.py`, `resultroute.py`.
 - Analysis outbound messages: `client.py`.
 - Chat key/JWT/widget: `chat.py`.
