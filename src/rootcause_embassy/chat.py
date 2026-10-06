@@ -17,8 +17,8 @@ from .errors import Misconfigured
 DEFAULT_TTL = 7200
 DEFAULT_ASSURANCE = "customer_backend_jwt"
 _HEADER = b'{"alg":"HS256","typ":"JWT"}'
-# Loader contract revision (hub decisions.md #19).
-LOADER_PATH = "/chat/widget/v1/loader.js?v=3"
+# Loader contract revision (hub decisions.md #23).
+LOADER_PATH = "/chat/widget/v1/loader.js?v=4"
 
 
 @dataclass(frozen=True, slots=True)

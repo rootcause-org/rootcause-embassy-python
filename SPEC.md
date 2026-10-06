@@ -71,7 +71,7 @@ api planes next. Zero DentAI-specific code in this repo.
     tenant?,locale?,color_scheme?` (optionals omitted, never null), header exactly
     `{"alg":"HS256","typ":"JWT"}`, base64url unpadded. `canonical_origin()` per `planes/chat.md`
     (refuse path/query/fragment at mint). `widget_tag_html(Widget) -> str`, loader
-    `/chat/widget/v1/loader.js?v=3`, attributes HTML-escaped, optional attrs only when set. Key =
+    `/chat/widget/v1/loader.js?v=4`, attributes HTML-escaped, optional attrs only when set. Key =
     `chat_secret` (webhook_secret) and boot-time refusal when it equals `secret`.
 11. **API plane** (`rootcause_embassy.api`): `API.get/post/patch/put/delete(path, body=None,
     params=None) -> APIResponse(ok, status, body, field_errors, error, retryable, err)`; `rcor_`
