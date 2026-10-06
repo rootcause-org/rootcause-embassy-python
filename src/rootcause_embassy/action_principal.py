@@ -12,6 +12,7 @@ from .errors import invalid_request
 
 ClaimValue = str | int | tuple[str, ...] | tuple[int, ...]
 _CLAIM_NAME = re.compile(r"[a-z][a-z0-9_]*\Z")
+CANONICAL_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,17 @@ def extract_action_principal(raw: dict[str, Any]) -> ActionPrincipal | None:
             raise invalid_request("principal claim names are invalid")
         claims[name] = _claim_value(value)
     return ActionPrincipal(kind, external_id, MappingProxyType(claims))
+
+
+def extract_action_run_id(raw: dict[str, Any]) -> str | None:
+    """Decode the optional host-stamped ledger id; a present value must be a canonical UUID."""
+
+    if "action_run_id" not in raw:
+        return None
+    value = raw["action_run_id"]
+    if not isinstance(value, str) or not CANONICAL_UUID.fullmatch(value):
+        raise invalid_request("action_run_id must be a canonical lowercase UUID")
+    return value
 
 
 def _required_string(raw: dict[str, Any], field: str) -> str:

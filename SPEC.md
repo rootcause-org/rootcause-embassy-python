@@ -27,7 +27,9 @@ api planes next. Zero DentAI-specific code in this repo.
 2. **Runtime token `"python"`, execution via `Config.runner` only** (hub decision 12). Signature:
    `runner(ctx: ActionContext, params: dict) -> Any` where `ActionContext` carries `action_id`,
    `digest`, `script: str`, `tenant: Tenant | None`, `out: io.StringIO` (captured stdout, 64 KiB
-   cap), `deadline: float` (monotonic). No built-in `exec` runner. No runner + real invocation →
+   cap), `deadline: float` (monotonic), optional host-stamped `principal` and `action_run_id`
+   (canonical lowercase UUID; typed, invocation-scoped, never `RC_ACTION_RUN_ID` env; malformed →
+   400 before resolution). No built-in `exec` runner. No runner + real invocation →
    signed `400 invalid_request`. `dry_run` works without a runner and MUST perform the signed fetch.
    Runner exceptions → signed `200` with `ok:false, error:{class:<ExceptionType name>, message,
    backtrace}` (decision 6e). Timeout: `Config.timeout` (20s) inside `Config.total_deadline` (22s);
@@ -141,8 +143,10 @@ Target ≈ 2k LOC source, tests lean — port the Go `contract_test.go` cases, d
 6. Result callback decode of `result_callback.json` → all fields asserted; ack bytes ==
    `result_ack.json`; redelivery semantics (3× → 1 dispatch; failed dispatch releases nonce; stale
    → 409; unconfigured handler → 500 `handler_error`; bad signature → golden 401 bytes).
-7. Outbound `trigger.json`, `trigger_with_principal.json`, `sent_message.json`, `answers.json`:
-   structural equality + top-level key order + signature over transmitted bytes.
+7. Outbound `trigger.json`, `trigger_with_principal.json`, `trigger_with_context_refs.json`,
+   `sent_message.json`, `answers.json`: structural equality + top-level key order + signature over
+   transmitted bytes. `context_refs` (≤1, `kind: "action_run"`, canonical UUID) refused before
+   sending. `invocation_action_run.json` exposes `ctx.action_run_id` only for that invocation.
 8. Chat: `jwt_vector.json` → exact `signing_input` and `token`; `widget_tag.html` byte-exact;
    `alg` header exact; blank secret refused; origin canonicalization cases.
 9. API: `rcor_` exchange round trip via injected transport, cache hit, 401 → single re-exchange,

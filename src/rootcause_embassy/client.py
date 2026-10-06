@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from .action_principal import CANONICAL_UUID
 from .config import Config
 from .errors import EmbassyError
 from .http import HTTPRequest
@@ -29,6 +30,15 @@ class Principal:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextRef:
+    """Locator for host-held context; only `kind="action_run"` with the trusted
+    `ActionContext.action_run_id` is defined. Grants nothing: the host authorizes from its rows."""
+
+    kind: str
+    id: str
+
+
+@dataclass(frozen=True, slots=True)
 class AnalysisRequest:
     body: str
     subject: str = ""
@@ -38,6 +48,7 @@ class AnalysisRequest:
     principal: Principal | None = None
     tenant: str = ""
     project_id: str = ""
+    context_refs: list[ContextRef] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +98,7 @@ class AnalysisClient:
         if not request.body:
             raise EmbassyError(0, "invalid_request", "analysis body is required")
         self._check_attachments(request.attachments)
+        _check_context_refs(request.context_refs)
         if request.principal is not None and (
             not request.principal.kind or not request.principal.external_id
         ):
@@ -104,6 +116,10 @@ class AnalysisClient:
         }
         if request.session_id:
             payload["session_id"] = request.session_id
+        if request.context_refs:
+            payload["context_refs"] = [
+                {"kind": ref.kind, "id": ref.id} for ref in request.context_refs
+            ]
         if request.principal is not None:
             payload["principal"] = _principal(request.principal)
         payload["nonce"] = self._config.nonce()
@@ -247,6 +263,20 @@ class AnalysisClient:
 
     def _issued_at(self) -> str:
         return datetime.fromtimestamp(self._config.now(), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _check_context_refs(refs: list[ContextRef] | None) -> None:
+    if refs is None:
+        return
+    if len(refs) > 1:
+        raise EmbassyError(0, "invalid_request", "context_refs allows at most one entry")
+    for ref in refs:
+        if ref.kind != "action_run":
+            raise EmbassyError(0, "invalid_request", "context_refs kind must be action_run")
+        if not isinstance(ref.id, str) or not CANONICAL_UUID.fullmatch(ref.id):
+            raise EmbassyError(
+                0, "invalid_request", "context_refs id must be a canonical lowercase UUID"
+            )
 
 
 def _principal(principal: Principal) -> dict[str, Any]:

@@ -16,7 +16,9 @@ from rootcause_embassy import (
     Attachment,
     Claims,
     Config,
+    ContextRef,
     Embassy,
+    EmbassyError,
     Principal,
     SentMessageMetadata,
     SentMessageRequest,
@@ -34,6 +36,7 @@ REVERSE_SECRET = "contract-reverse-secret"
 CHAT_SECRET = "contract-chat-secret"
 PROJECT_ID = "11111111-1111-1111-1111-111111111111"
 SESSION_ID = "44444444-4444-4444-4444-444444444444"
+ACTION_RUN_ID = "55555555-5555-5555-5555-555555555555"
 REFERENCE_CLOCK = 1781913600.0
 PYTHON_SCRIPT = """\
 print("looked up " + action_id, file=out)
@@ -368,6 +371,62 @@ def test_absent_or_empty_inline_attachments_preserve_execution(
     assert calls == ([] if dry_run else [payload["params"]])
 
 
+def action_run_payload(host: FakeHost, **overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = json_fixture("actions/invocation_action_run.json")
+    payload.update(runtime="python", script_digest=host.digest, **overrides)
+    return payload
+
+
+def test_action_run_id_is_typed_and_invocation_scoped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RC_ACTION_RUN_ID", "66666666-6666-6666-6666-666666666666")
+    host = FakeHost()
+    seen: list[str | None] = []
+
+    def runner(ctx: ActionContext, params: dict[str, Any]) -> bool:
+        seen.append(ctx.action_run_id)
+        return True
+
+    target = embassy(host, runner=runner)
+    assert post_action(target, wire_json(action_run_payload(host)))[0] == 200
+    assert post_action(target, invocation(host, nonce="nonce-action-run-less"))[0] == 200
+    assert seen == [ACTION_RUN_ID, None]
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "not-a-uuid",
+        "AAAAAAAA-5555-5555-5555-555555555555",
+        "{" + ACTION_RUN_ID + "}",
+        55,
+        None,
+        [ACTION_RUN_ID],
+    ],
+)
+def test_malformed_action_run_id_refuses_before_resolution(value: Any, dry_run: bool) -> None:
+    host = FakeHost()
+    calls: list[Any] = []
+    payload = action_run_payload(host, action_run_id=value, dry_run=dry_run)
+    target = embassy(host, runner=lambda ctx, params: calls.append(params))
+    response = post_action(target, wire_json(payload))
+    assert_class(response, 400, "invalid_request")
+    assert host.last_request is None
+    assert calls == []
+
+
+def test_dry_run_with_action_run_id_validates_without_running() -> None:
+    host = FakeHost()
+    calls: list[Any] = []
+    target = embassy(host, runner=lambda ctx, params: calls.append(params))
+    response = post_action(target, wire_json(action_run_payload(host, dry_run=True)))
+    assert_signed(response)
+    assert response[0] == 200
+    assert json.loads(response[2])["return_value"] == {"dry_run": True, "would_execute": True}
+    assert calls == []
+
+
 def normalize_duration(body: str) -> str:
     marker = '"duration_ms":'
     index = body.index(marker)
@@ -487,7 +546,7 @@ def test_method_not_allowed_and_health() -> None:
         fixture("actions/health_response.json")
         .decode()
         .replace('"embassy":"ruby"', '"embassy":"python"')
-        .replace('"version":"0.5.0"', '"version":"0.2.0"')
+        .replace('"version":"0.5.0"', '"version":"0.3.0"')
     )
     assert response[2].decode() == expected
     assert "attachments_inline" not in json.loads(response[2])["capabilities"]
@@ -712,6 +771,18 @@ def test_result_redelivery_semantics() -> None:
                 ),
             ),
         ),
+        (
+            "analysis/trigger_with_context_refs.json",
+            "contract-nonce-trigger-context",
+            AnalysisRequest(
+                subject="Ticket from chat escalation",
+                body="Created from the chat; the admin reported a refused password reset.",
+                metadata={"resource_type": "SupportTicket", "resource_id": "42"},
+                session_id="support_ticket-42",
+                context_refs=[ContextRef("action_run", ACTION_RUN_ID)],
+                tenant="acme",
+            ),
+        ),
     ],
 )
 def test_outbound_trigger_serialization(name, nonce, analysis_request) -> None:
@@ -722,6 +793,26 @@ def test_outbound_trigger_serialization(name, nonce, analysis_request) -> None:
     assert analysis.analysis_id
     assert analysis.session_id == SESSION_ID
     assert_outbound(host, name)
+
+
+@pytest.mark.parametrize(
+    "refs",
+    [
+        [ContextRef("action_run", ACTION_RUN_ID), ContextRef("action_run", SESSION_ID)],
+        [ContextRef("chat_session", ACTION_RUN_ID)],
+        [ContextRef("action_run", "not-a-uuid")],
+        [ContextRef("action_run", "AAAAAAAA-5555-5555-5555-555555555555")],
+    ],
+)
+def test_outbound_trigger_refuses_invalid_context_refs_before_sending(
+    refs: list[ContextRef],
+) -> None:
+    host = FakeHost()
+    request = AnalysisRequest(body="x", context_refs=refs)
+    with pytest.raises(EmbassyError) as raised:
+        embassy(host).start_analysis(request)
+    assert raised.value.error_class == "invalid_request"
+    assert host.last_request is None
 
 
 @pytest.mark.parametrize(

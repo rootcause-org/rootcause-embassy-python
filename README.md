@@ -207,6 +207,7 @@ def run_action(ctx: ActionContext, params: dict[str, Any]) -> Any:
         "params": MappingProxyType(params),  # data, never interpolated into source
         "tenant": ctx.tenant,  # trusted typed tuple, never params/env
         "principal": ctx.principal,  # host-stamped identity, only for this invocation
+        "action_run_id": ctx.action_run_id,  # host ledger id; None on dry run/older hosts
         "out": ctx.out,  # captured stdout, capped at 64 KiB
     }
     exec(compile(ctx.script, f"<rootcause:{ctx.digest}>", "exec"), scope)
@@ -231,6 +232,7 @@ deadline into your I/O and make actions idempotent; a timeout is not a transacti
 | refuse malformed or nonempty inline action `attachments`, including dry-run | `400 invalid_request` |
 | validate the tenant tuple | `400 invalid_request` |
 | validate optional host-stamped principal context | `400 invalid_request` |
+| validate optional host-stamped `action_run_id` (canonical UUID) | `400 invalid_request` |
 | require fresh `issued_at` and an unseen `nonce` | `409 replay` |
 | re-validate params against the invocation schema | `422 schema_violation` |
 | signed script fetch plus digest/runtime verification | `502 resolve_failed` |
@@ -266,6 +268,11 @@ analysis = embassy.start_analysis(
 )
 # Persist analysis.analysis_id and analysis.session_id.
 ```
+
+A ticket created by a chat escalation action can hand that chat to its analysis: store the action's
+`ctx.action_run_id` with the ticket and pass `context_refs=[ContextRef("action_run", stored_id)]`
+(at most one, validated before sending). Never take the id from params or user text; the id locates,
+the host authorizes, and the action's approved manifest must opt in.
 
 Your `result_handler(result)` must be idempotent: upsert by `result.analysis_id` or metadata. A
 handler failure is not acknowledged, the nonce is released, and rootcause redelivers. Render

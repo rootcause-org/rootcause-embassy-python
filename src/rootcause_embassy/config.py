@@ -38,6 +38,7 @@ class ActionContext:
     out: io.StringIO
     deadline: float
     principal: ActionPrincipal | None = None
+    action_run_id: str | None = None
 
 
 def _new_nonce() -> str:

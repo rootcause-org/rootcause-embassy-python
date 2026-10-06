@@ -9,7 +9,7 @@ import traceback
 from typing import Any
 from urllib.parse import parse_qs
 
-from .action_principal import ActionPrincipal, extract_action_principal
+from .action_principal import ActionPrincipal, extract_action_principal, extract_action_run_id
 from .config import ActionContext, Config
 from .errors import (
     INTERNAL_ERROR,
@@ -99,7 +99,7 @@ class ActionPlane:
             {
                 "ok": True,
                 "embassy": "python",
-                "version": "0.2.0",
+                "version": "0.3.0",
                 "protocol": 1,
                 "capabilities": _CAPABILITIES,
             },
@@ -115,6 +115,7 @@ class ActionPlane:
             invocation = _parse_invocation(body)
             tenant = extract_tenant(invocation, self._config.require_tenant_context)
             principal = extract_action_principal(invocation)
+            action_run_id = extract_action_run_id(invocation)
             issued_at = _required_string(invocation, "issued_at")
             check_freshness(issued_at, self._config.clock_skew, self._config.now())
             nonce = _required_string(invocation, "nonce")
@@ -148,7 +149,16 @@ class ActionPlane:
             if self._config.runner is None:
                 raise invalid_request("runtime python is not executable in this Embassy")
             return self._run(
-                started, deadline, action_id, digest, script, tenant, principal, params, secret
+                started,
+                deadline,
+                action_id,
+                digest,
+                script,
+                tenant,
+                principal,
+                action_run_id,
+                params,
+                secret,
             )
         except Refusal as refusal:
             self._config.logger.warning(
@@ -192,6 +202,7 @@ class ActionPlane:
         script: str,
         tenant: Any,
         principal: ActionPrincipal | None,
+        action_run_id: str | None,
         params: dict[str, Any],
         secret: str,
     ) -> Response:
@@ -203,6 +214,7 @@ class ActionPlane:
             script=script,
             tenant=tenant,
             principal=principal,
+            action_run_id=action_run_id,
             out=output,
             deadline=execution_deadline,
         )

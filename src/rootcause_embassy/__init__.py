@@ -13,6 +13,7 @@ from .client import (
     AnalysisClient,
     AnalysisRequest,
     Answer,
+    ContextRef,
     Principal,
     SentMessage,
     SentMessageMetadata,
@@ -35,7 +36,7 @@ from .resultroute import ResultRoute
 from .signature import HEADER, sign, verify
 from .tenant import Tenant
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 PROTOCOL = 1
 RUNTIME = "python"
 
@@ -109,6 +110,7 @@ __all__ = [
     "Attachment",
     "Claims",
     "Config",
+    "ContextRef",
     "Decline",
     "Embassy",
     "EmbassyError",
