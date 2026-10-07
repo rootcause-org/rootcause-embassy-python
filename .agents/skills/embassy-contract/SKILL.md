@@ -19,7 +19,9 @@ Read [../../../AGENTS.md](../../../AGENTS.md), then read the authority in
   health must not advertise `attachments_inline` until invocation-scoped materialization exists.
 - Analysis callback/result shape: `result.py`, `resultroute.py`.
 - Analysis outbound messages: `client.py`.
-- Chat key/JWT/widget: `chat.py`.
+- Chat key/JWT/widget: `chat.py`. Loader revision follows hub decision 25 (`?v=5`);
+  page-context callbacks and queued snapshots belong to the hosted loader. `chat/page_url.json`
+  is unsigned normalization data, not a JWT claim or signing vector.
 - Bearer API/exchange/cache: `api.py`.
 - Construction and deterministic seams: `config.py`, `http.py`, `__init__.py`.
 

@@ -323,6 +323,11 @@ tag = widget_tag_html(
 Mint a fresh token per render: the host burns its `jti` when a session opens. Chat uses the project's
 `webhook_secret`, never the action secret.
 
+The tag uses loader revision `?v=5`. Register `getPageContext` with `RootCause('boot',
+{getPageContext: () => "# Current selection\nResource: people"})` before loading it to provide
+per-message Markdown. The hosted loader captures URL/context at submission and preserves queued
+snapshots; these hints never authorize access. See the [hub chat contract](https://github.com/rootcause-org/rootcause-embassy/blob/main/planes/chat.md#page-context-page_url-page_context).
+
 ## Generic API plane
 
 ```python
